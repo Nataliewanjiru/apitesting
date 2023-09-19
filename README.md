@@ -5,7 +5,7 @@
 # Technologies used
 - Python
  
-# SetUP
+# Setup
 - We imported the requests module
 -Using a movie api we got the data using response = request.get("https://netflix-data.p.rapidapi.com/search/")
 -Other parameters such as API keys and parameters were included
