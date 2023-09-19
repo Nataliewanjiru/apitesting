@@ -7,9 +7,9 @@
  
 # Setup
 - We imported the requests module
--Using a movie api we got the data using response = request.get("https://netflix-data.p.rapidapi.com/search/")
+- Using a movie api we got the data using response = request.get("https://netflix-data.p.rapidapi.com/search/")
 
--Other parameters such as API keys and parameters were included
+- Other parameters such as API keys and parameters were included
 
 - HTTPS status code was 200
 
