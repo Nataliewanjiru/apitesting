@@ -117,7 +117,8 @@ def handle_booking_intent(extracted_info: Dict, user, message_text: str = ""):
         return handle_appointment_cancellation(user, appointment_id)
 
     # Step 1: If no doctor selected, suggest doctors based on symptoms/specialization
-    if not doctor_name and (specialization or inquiry_info.get("symptoms")):
+    symptoms_list = inquiry_info.symptoms if inquiry_info else []
+    if not doctor_name and (specialization or symptoms_list):
         return handle_doctor_recommendation_request(specialization, location, inquiry_info)
 
     # Step 2: Check if user is confirming booking (improved detection)
@@ -126,9 +127,10 @@ def handle_booking_intent(extracted_info: Dict, user, message_text: str = ""):
     if doctor_name and (confirmed is True or is_confirming):
         print(f"🔍 Booking confirmation detected")
         
-        # Proceed with actual booking
-        symptoms = ", ".join(inquiry_info.get("symptoms", [])) if inquiry_info.get("symptoms") else "general check-up"
-        preferred_modes = inquiry_info.get("preferred_modes_of_consultation", [])
+        # Proceed with actual booking - FIXED: Direct attribute access
+        symptoms_list = inquiry_info.symptoms if inquiry_info else []
+        symptoms = ", ".join(symptoms_list) if symptoms_list else "general check-up"
+        preferred_modes = inquiry_info.preferred_modes_of_consultation if inquiry_info else []
         mode = preferred_modes[0] if preferred_modes else "clinic"
 
         try:
@@ -181,7 +183,8 @@ def handle_doctor_recommendation_request(specialization: str, location: str, inq
     Handle doctor recommendations based on symptoms or specialization
     """
     try:
-        symptoms = inquiry_info.get("symptoms", []) if inquiry_info else []
+        # FIXED: Direct attribute access instead of .get()
+        symptoms = inquiry_info.symptoms if inquiry_info else []
         
         if symptoms:
             # Use symptom-based recommendation

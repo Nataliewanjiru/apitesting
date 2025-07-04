@@ -1,16 +1,16 @@
 from typing import Dict, List, Optional
 from apps.whatsappplugin1 import models as WHATSAPP_PLUGIN1
-from .handle_booking_intent import (
+from apps.whatsappplugin1.handle_booking_intent import (
     handle_booking_intent, 
     detect_cancellation_intent,
     handle_appointment_cancellation,
     get_user_appointments,
     format_appointment_list
 )
-from .ai_engine import ConversationManager
-import apps.patients.messages as PATIENTS_MESSAGES
-import apps.general.messages as GENERAL_MESSAGES
-import apps.core.utilities as UTILITIES
+from apps.whatsappplugin1.aiengine2 import ConversationManager
+import apps.whatsappplugin1.messages.patients as PATIENTS_MESSAGES
+import apps.whatsappplugin1.messages.general as GENERAL_MESSAGES
+import apps.whatsappplugin1.utilities as UTILITIES
 
 
 def handle_conversation_mode_chatbot_message_v2(
@@ -23,21 +23,18 @@ def handle_conversation_mode_chatbot_message_v2(
     if direct_response:
         return direct_response
     
-    # Reuse existing engine for this user
-    ai_engine = ConversationManager.get_engine(user_session.user_phone_number)
+    # CRITICAL FIX: Pass user_session to get_engine for memory persistence
+    ai_engine = ConversationManager.get_engine(user_session.user_phone_number, user_session)
     
-    # Only load history ONCE (when engine is first created)
-    if not ai_engine.memory.chat_memory.messages:
-        ai_engine.load_serialized_history_into_memory(
-            user_session.ai_conversation_history, 
-            ai_engine.memory
-        )
+    # Memory is automatically loaded in get_engine method
     
     response, error = ai_engine.generate_response(message=message_text)
     
-    # Only serialize when conversation truly ends     
+    # Always save after each conversation exchange
+    user_session.ai_conversation_history = ai_engine.serialize_conversation_history(ai_engine.memory)
+    user_session.save()  # CRITICAL: Save to database immediately
+    
     if not response:
-        user_session.ai_conversation_history = ai_engine.serialize_conversation_history(ai_engine.memory)
         return [
             UTILITIES.create_text_message(
                 "Sorry, our AI assistant is unavailable at the moment. Please try again later.\n"
@@ -55,7 +52,6 @@ def handle_conversation_mode_chatbot_message_v2(
     
     # Continue conversation if there's a next question
     if next_question is not None and next_question.strip() != "":
-        user_session.ai_conversation_history = ai_engine.serialize_conversation_history(ai_engine.memory)
         return UTILITIES.create_text_message(f"{next_question}\n")
     
 
@@ -65,6 +61,7 @@ def handle_conversation_mode_chatbot_message_v2(
         inquiry_obj = extracted_info.get("PromptOutputInquiry")  
 
         if inquiry_obj:
+            # FIXED: Direct attribute access instead of .get()
             symptoms = inquiry_obj.symptoms or []
             print(f"🔍 Found symptoms: {symptoms}")
 
@@ -84,6 +81,7 @@ def handle_conversation_mode_chatbot_message_v2(
             ]
 
         collected_symptoms = " ".join(symptoms)
+        # FIXED: Direct attribute access instead of .get()
         if inquiry_obj.additional_medical_information:
             collected_symptoms += " " + " ".join(
                 inquiry_obj.additional_medical_information
@@ -102,9 +100,6 @@ def handle_conversation_mode_chatbot_message_v2(
             message_text=message_text  # Pass the actual message for better detection
         )
         
-        # Save progress but keep engine alive
-        user_session.ai_conversation_history = ai_engine.serialize_conversation_history(ai_engine.memory)
-        
         # Continue conversation regardless of result
         return [UTILITIES.create_text_message(booking_result)]
 
@@ -116,12 +111,10 @@ def handle_conversation_mode_chatbot_message_v2(
             message_text=message_text
         )
         
-        user_session.ai_conversation_history = ai_engine.serialize_conversation_history(ai_engine.memory)
         return [UTILITIES.create_text_message(management_result)]                              
 
     # Handle fallback/default
     else:
-        user_session.ai_conversation_history = ai_engine.serialize_conversation_history(ai_engine.memory)
         return [
             UTILITIES.create_text_message(
                 response.closing_remark
@@ -245,8 +238,6 @@ def handle_urgent_appointment_request(user):
     Handle urgent/emergency appointment requests
     """
     try:
-        from .doctor_recommendations import get_health_worker_recommendation_from_symptoms
-        
         # Look for available doctors with immediate slots
         message = ("For urgent medical needs, I recommend:\n\n"
                   "🚨 **Emergency**: Call 911 or visit the nearest hospital\n"
@@ -296,7 +287,7 @@ def handle_calendar_integration_request(user, appointment):
     Handle requests to add appointments to calendar
     """
     try:
-        from .appointment_functions import create_and_save_icalendar_event
+        from apps.whatsappplugin1.appointment_functions import create_and_save_icalendar_event
         
         # Create calendar event
         icalendar_file = create_and_save_icalendar_event(
@@ -343,18 +334,19 @@ def handle_notification_preferences(user, message_text: str):
 
 def handle_doctor_recommendation_from_symptoms(user_session, symptoms: str):
     """
-    Handle doctor recommendations based on symptoms
+    Handle doctor recommendations based on symptoms - FIXED PYDANTIC ERROR
     """
     try:
-        from .doctor_recommendations import get_health_worker_recommendation_from_symptoms
+        from apps.whatsappplugin1.ai_functions import get_health_worker_recommendation_from_symptoms
         
         # Get AI-powered recommendations
         recommendation_result, specialty_query, error = get_health_worker_recommendation_from_symptoms(symptoms)
         
         if error:
+            print(f"🔍 Error in doctor recommendation: {error}")
             return [
                 UTILITIES.create_text_message(
-                    "I'm having trouble finding doctors right now. Please try again or visit www.rastuc.com to browse available healthcare providers."
+                    "I'm having trouble finding doctors right now. Please try again or visit our website at www.rastuc.com"
                 ),
                 PATIENTS_MESSAGES.create_home_message(user_session=user_session)
                 if user_session.active_patient_profile
