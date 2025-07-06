@@ -229,38 +229,92 @@ def get_doctor_available_times(user_session, availability_request: dict) -> str:
                 return "Invalid date format. Please use YYYY-MM-DD format."
         
         available_slots = []
+        consultation_modes_to_try = [consultation_mode, 'clinic_visit', 'virtual', 'home_visit']
+        successful_mode = None
         
-        # Check common appointment times (9 AM to 5 PM)
-        for check_date in dates_to_check:
-            for hour in range(9, 17):  # 9 AM to 5 PM
-                start_time = check_date.replace(hour=hour, minute=0, second=0, microsecond=0)
-                end_time = start_time + timedelta(hours=1)
-                
-                # Skip past times
-                if start_time < UTILITIES_FUNCTIONS.get_current_time():
-                    continue
-                
-                # Check if this slot is available
-                is_available, availability = check_health_worker_availability(
-                    worker=doctor,
-                    start_time=start_time,
-                    end_time=end_time,
-                    mode=consultation_mode
-                )
-                
-                if is_available:
-                    available_slots.append({
-                        'date': start_time.strftime('%Y-%m-%d'),
-                        'time': start_time.strftime('%H:%M'),
-                        'day': start_time.strftime('%A')
-                    })
+        # Try different consultation modes if the first one doesn't work
+        for mode_to_try in consultation_modes_to_try:
+            mode_slots = []
+            
+            # Check common appointment times (9 AM to 5 PM)
+            for check_date in dates_to_check:
+                for hour in range(9, 17):  # 9 AM to 5 PM
+                    start_time = check_date.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    end_time = start_time + timedelta(hours=1)
+                    
+                    # Skip past times
+                    if start_time < UTILITIES_FUNCTIONS.get_current_time():
+                        continue
+                    
+                    # Check if this slot is available
+                    try:
+                        is_available, availability = check_health_worker_availability(
+                            worker=doctor,
+                            start_time=start_time,
+                            end_time=end_time,
+                            mode=mode_to_try
+                        )
+                        
+                        if is_available:
+                            mode_slots.append({
+                                'date': start_time.strftime('%Y-%m-%d'),
+                                'time': start_time.strftime('%H:%M'),
+                                'day': start_time.strftime('%A'),
+                                'mode': mode_to_try
+                            })
+                    except Exception as e:
+                        print(f"Error checking availability for {mode_to_try}: {e}")
+                        continue
+            
+            if mode_slots:
+                available_slots = mode_slots
+                successful_mode = mode_to_try
+                break
         
         if not available_slots:
-            return f"❌ {doctor.title} {doctor.get_full_name()} has no available slots in the next 7 days for {consultation_mode} consultation.\n" \
-                   f"Please try a different consultation mode or contact the doctor directly."
+            # Try without mode restriction (compatibility with empty encounter_modes)
+            print(f"No slots found with mode restrictions. Trying without mode for {doctor.get_full_name()}")
+            
+            for check_date in dates_to_check:
+                for hour in range(9, 17):
+                    start_time = check_date.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    end_time = start_time + timedelta(hours=1)
+                    
+                    if start_time < UTILITIES_FUNCTIONS.get_current_time():
+                        continue
+                    
+                    try:
+                        # Try with None mode
+                        is_available, availability = check_health_worker_availability(
+                            worker=doctor,
+                            start_time=start_time,
+                            end_time=end_time,
+                            mode=None
+                        )
+                        
+                        if is_available:
+                            available_slots.append({
+                                'date': start_time.strftime('%Y-%m-%d'),
+                                'time': start_time.strftime('%H:%M'),
+                                'day': start_time.strftime('%A'),
+                                'mode': 'any'
+                            })
+                            successful_mode = 'any mode'
+                    except Exception as e:
+                        print(f"Error checking availability without mode: {e}")
+                        continue
+        
+        if not available_slots:
+            return f"❌ {doctor.title} {doctor.get_full_name()} has no available slots in the next 7 days.\n" \
+                   f"This might be because:\n" \
+                   f"• No availability records are set up\n" \
+                   f"• All slots are already booked\n" \
+                   f"• Encounter modes don't match\n" \
+                   f"Please contact the doctor directly or try a different time period."
         
         # Format the response
-        result = f"📅 Available times for {doctor.title} {doctor.get_full_name()} ({consultation_mode} consultation):\n\n"
+        display_mode = successful_mode if successful_mode != 'any' else 'consultation'
+        result = f"📅 Available times for {doctor.title} {doctor.get_full_name()} ({display_mode}):\n\n"
         
         # Group by date
         current_date = None
@@ -274,4 +328,7 @@ def get_doctor_available_times(user_session, availability_request: dict) -> str:
         return result
         
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Availability check failed for {doctor_name}: {error_details}")
         return f"Availability check failed: {str(e)}"
