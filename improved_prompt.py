@@ -75,6 +75,14 @@ When processing doctor searches or provider recommendations:
    - Always explain why specific providers are recommended
    - Provide clear next steps for booking
 
+6. **Availability Checking Guidelines**:
+   - **When user asks "when is doctor available"**: Use `get_doctor_available_times` function
+   - **When user provides specific time**: Use `check_doctor_availability` function
+   - **Examples**:
+     - "When is Dr. Smith available?" → `get_doctor_available_times`
+     - "Is Dr. Smith available at 2 PM today?" → `check_doctor_availability`
+   - **Don't persist with same parameters**: If user wants different information, adjust accordingly
+
 [Appointment Booking]
 After the patient has selected the preferred doctor, proceed to help the patient schedule the appointment.
 Offer flexibility in how patients select appointment times (e.g., they can either select to use natural language input like "next Monday afternoon" or provide structured options when helpful).

@@ -160,6 +160,87 @@ def search_doctors_by_criteria(user_session, search_criteria: dict) -> str:
     except Exception as e:
         return f"Doctor search failed: {str(e)}"
 
+def get_doctor_available_times(user_session, availability_request: dict) -> str:
+    """Get available time slots for a doctor (when user asks 'when is doctor available')"""
+    try:
+        doctor_name = availability_request.get('doctor_name', '')
+        date_str = availability_request.get('date', '')  # Optional - can be empty
+        consultation_mode = availability_request.get('consultation_mode', 'virtual')
+        
+        if not doctor_name:
+            return "Please provide doctor name to check availability."
+        
+        # Find the doctor
+        doctors = HEALTHWORKERS_MODELS.HealthWorker.filter_objects(
+            is_published=True,
+            verification_status=CORE_CHOICES.HealthWorkerVerificationStatuses.VERIFIED.value
+        )
+        doctors = search_health_worker_query_set(doctors, doctor_name)
+        
+        if not doctors:
+            return f"Doctor '{doctor_name}' not found."
+        
+        doctor = doctors.first()
+        
+        # If no specific date provided, check next 7 days
+        if not date_str:
+            current_time = UTILITIES_FUNCTIONS.get_current_time()
+            dates_to_check = [current_time + timedelta(days=i) for i in range(7)]
+        else:
+            try:
+                specific_date = UTILITIES_FUNCTIONS.string_to_datetime(f"{date_str} 00:00:00.0 +0300")
+                dates_to_check = [specific_date]
+            except:
+                return "Invalid date format. Please use YYYY-MM-DD format."
+        
+        available_slots = []
+        
+        # Check common appointment times (9 AM to 5 PM)
+        for check_date in dates_to_check:
+            for hour in range(9, 17):  # 9 AM to 5 PM
+                start_time = check_date.replace(hour=hour, minute=0, second=0, microsecond=0)
+                end_time = start_time + timedelta(hours=1)
+                
+                # Skip past times
+                if start_time < UTILITIES_FUNCTIONS.get_current_time():
+                    continue
+                
+                # Check if this slot is available
+                is_available, availability = check_health_worker_availability(
+                    worker=doctor,
+                    start_time=start_time,
+                    end_time=end_time,
+                    mode=consultation_mode
+                )
+                
+                if is_available:
+                    available_slots.append({
+                        'date': start_time.strftime('%Y-%m-%d'),
+                        'time': start_time.strftime('%H:%M'),
+                        'day': start_time.strftime('%A')
+                    })
+        
+        if not available_slots:
+            return f"❌ {doctor.title} {doctor.get_full_name()} has no available slots in the next 7 days for {consultation_mode} consultation.\n" \
+                   f"Please try a different consultation mode or contact the doctor directly."
+        
+        # Format the response
+        result = f"📅 Available times for {doctor.title} {doctor.get_full_name()} ({consultation_mode} consultation):\n\n"
+        
+        # Group by date
+        current_date = None
+        for slot in available_slots[:20]:  # Limit to first 20 slots
+            if slot['date'] != current_date:
+                result += f"📅 {slot['day']}, {slot['date']}:\n"
+                current_date = slot['date']
+            result += f"   • {slot['time']}\n"
+        
+        result += f"\nWould you like to book any of these available times?"
+        return result
+        
+    except Exception as e:
+        return f"Availability check failed: {str(e)}"
+
 def check_doctor_availability(user_session, availability_request: dict) -> str:
     """Check if a doctor is available for a specific date and time"""
     try:
@@ -168,8 +249,12 @@ def check_doctor_availability(user_session, availability_request: dict) -> str:
         time_str = availability_request.get('time', '')
         consultation_mode = availability_request.get('consultation_mode', 'clinic_visit')
         
-        if not doctor_name or not date_str or not time_str:
-            return "Please provide doctor name, date, and time to check availability."
+        # If no specific time provided, redirect to available times function
+        if not time_str or not date_str:
+            return get_doctor_available_times(user_session, availability_request)
+        
+        if not doctor_name:
+            return "Please provide doctor name to check availability."
         
         # Find the doctor
         doctors = HEALTHWORKERS_MODELS.HealthWorker.filter_objects(
@@ -691,8 +776,30 @@ HEALTHCARE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_doctor_available_times",
+            "description": "Get available time slots for a doctor when user asks 'when is doctor available' or wants to see available times",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "availability_request": {
+                        "type": "object",
+                        "properties": {
+                            "doctor_name": {"type": "string", "description": "Name of the doctor"},
+                            "date": {"type": "string", "description": "Optional specific date in YYYY-MM-DD format. If not provided, checks next 7 days"},
+                            "consultation_mode": {"type": "string", "enum": ["virtual", "clinic_visit", "home_care"], "description": "Type of consultation, defaults to virtual"}
+                        },
+                        "required": ["doctor_name"]
+                    }
+                },
+                "required": ["availability_request"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "check_doctor_availability",
-            "description": "Check if a specific doctor is available at a particular date and time",
+            "description": "Check if a specific doctor is available at a particular date and time (only use when user provides specific time)",
             "parameters": {
                 "type": "object",
                 "properties": {
