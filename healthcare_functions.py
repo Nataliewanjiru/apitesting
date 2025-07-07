@@ -734,8 +734,18 @@ def cancel_appointment(user_session, cancellation_details: dict) -> str:
         # Try to find appointment by doctor name in identifier
         matching_appointments = []
         for apt in appointments:
-            if apt.doctor and appointment_identifier.lower() in apt.doctor.get_full_name().lower():
+            # Fix: Check if doctor's name is contained in the identifier (not the other way around)
+            if apt.doctor and apt.doctor.get_full_name().lower() in appointment_identifier.lower():
                 matching_appointments.append(apt)
+                print(f"🔍 Found matching appointment for cancellation: {apt.doctor.get_full_name()}")
+            
+            # Also try matching with just the first name and last name parts
+            if apt.doctor and not matching_appointments:
+                doctor_parts = apt.doctor.get_full_name().lower().split()
+                identifier_lower = appointment_identifier.lower()
+                if any(part in identifier_lower for part in doctor_parts if len(part) > 2):
+                    matching_appointments.append(apt)
+                    print(f"🔍 Found matching appointment by name parts for cancellation: {apt.doctor.get_full_name()}")
         
         if not matching_appointments:
             return f"No upcoming appointment found matching '{appointment_identifier}'. Please check the details."
@@ -778,6 +788,8 @@ def reschedule_appointment(user_session, reschedule_details: dict) -> str:
         new_time = reschedule_details.get('new_time', '')
         reason = reschedule_details.get('reason', 'Patient requested reschedule')
         
+        print(f"🔍 Reschedule request: identifier='{appointment_identifier}', new_date='{new_date}', new_time='{new_time}'")
+        
         if not all([appointment_identifier, new_date, new_time]):
             return "Please provide appointment identifier, new date, and new time to reschedule."
         
@@ -793,10 +805,25 @@ def reschedule_appointment(user_session, reschedule_details: dict) -> str:
             ]
         )
         
+        print(f"🔍 Found {appointments.count()} total appointments for patient")
+        
         matching_appointments = []
         for apt in appointments:
-            if apt.doctor and appointment_identifier.lower() in apt.doctor.get_full_name().lower():
+            print(f"🔍 Checking appointment: {apt.doctor.get_full_name() if apt.doctor else 'No Doctor'}")
+            # Fix: Check if doctor's name is contained in the identifier (not the other way around)
+            if apt.doctor and apt.doctor.get_full_name().lower() in appointment_identifier.lower():
                 matching_appointments.append(apt)
+                print(f"🔍 ✅ Found matching appointment: {apt.doctor.get_full_name()}")
+            elif apt.doctor:
+                print(f"🔍 ❌ No match: '{apt.doctor.get_full_name().lower()}' not in '{appointment_identifier.lower()}'")
+            
+            # Also try matching with just the first name and last name parts
+            if apt.doctor and not matching_appointments:
+                doctor_parts = apt.doctor.get_full_name().lower().split()
+                identifier_lower = appointment_identifier.lower()
+                if any(part in identifier_lower for part in doctor_parts if len(part) > 2):
+                    matching_appointments.append(apt)
+                    print(f"🔍 ✅ Found matching appointment by name parts: {apt.doctor.get_full_name()}")
         
         if not matching_appointments:
             return f"No upcoming appointment found matching '{appointment_identifier}'."
