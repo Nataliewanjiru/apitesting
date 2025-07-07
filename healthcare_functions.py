@@ -454,6 +454,27 @@ def create_confirmed_appointment(doctor, patient_user, appointment_start, appoin
         return "Sorry, there was an error confirming your appointment. Please try again or contact support."
 
 
+def get_current_date_if_invalid(date_str: str) -> str:
+    """Helper function to ensure we use current date if provided date is invalid or in the past"""
+    try:
+        # Parse the provided date
+        provided_date = UTILITIES_FUNCTIONS.string_to_datetime(f"{date_str} 00:00:00.0 +0300")
+        current_time = UTILITIES_FUNCTIONS.get_current_time()
+        
+        # If the provided date is more than a year old or in the future beyond reasonable booking window
+        if (provided_date.year < current_time.year - 1) or (provided_date > current_time + timedelta(days=365)):
+            # Use current date instead
+            corrected_date = current_time.strftime('%Y-%m-%d')
+            print(f"🔍 Date correction: {date_str} -> {corrected_date} (using current date)")
+            return corrected_date
+        
+        return date_str
+    except:
+        # If date parsing fails, use current date
+        corrected_date = UTILITIES_FUNCTIONS.get_current_time().strftime('%Y-%m-%d')
+        print(f"🔍 Date correction: {date_str} -> {corrected_date} (parsing failed)")
+        return corrected_date
+
 def book_appointment_with_doctor(user_session, booking_details: dict) -> str:
     """Book an appointment with a specific doctor"""
     try:
@@ -467,6 +488,10 @@ def book_appointment_with_doctor(user_session, booking_details: dict) -> str:
         
         if not doctor_name or not date_str or not time_str:
             return "Please provide doctor name, date, and time to book appointment."
+        
+        # Fix date if it's invalid or from wrong year
+        date_str = get_current_date_if_invalid(date_str)
+        print(f"🔍 Using date: {date_str}")
         
         # Find the doctor
         doctors = HEALTHWORKERS_MODELS.HealthWorker.filter_objects(
@@ -543,11 +568,29 @@ def quick_book_from_available_slots(user_session, booking_request: dict) -> str:
         consultation_mode = booking_request.get('consultation_mode', 'virtual')
         symptoms = booking_request.get('symptoms', 'General consultation')
         
-        # Parse the selected slot (format: "2025-07-07 09:00")
-        if " " not in selected_slot:
-            return "Please provide the date and time in format: YYYY-MM-DD HH:MM"
+        # If no specific slot provided, get current available slots and use the first one
+        if not selected_slot or selected_slot.strip() == "":
+            # Get today's date and time for booking
+            current_time = UTILITIES_FUNCTIONS.get_current_time()
+            # Round to next hour for booking
+            next_hour = current_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            
+            date_str = next_hour.strftime('%Y-%m-%d')
+            time_str = next_hour.strftime('%H:%M')
+            print(f"🔍 No slot specified, using next available: {date_str} {time_str}")
+        else:
+            # Parse the selected slot (format: "2025-07-07 09:00" or just "09:00")
+            if " " in selected_slot:
+                date_str, time_str = selected_slot.split(" ", 1)
+            else:
+                # If only time provided, use current date
+                current_time = UTILITIES_FUNCTIONS.get_current_time()
+                date_str = current_time.strftime('%Y-%m-%d')
+                time_str = selected_slot
+                print(f"🔍 Only time provided, using current date: {date_str} {time_str}")
         
-        date_str, time_str = selected_slot.split(" ", 1)
+        # Ensure we have a valid date (not from the wrong year)
+        date_str = get_current_date_if_invalid(date_str)
         
         booking_details = {
             'doctor_name': doctor_name,
@@ -557,6 +600,7 @@ def quick_book_from_available_slots(user_session, booking_request: dict) -> str:
             'symptoms': symptoms
         }
         
+        print(f"🔍 Quick booking with corrected details: {booking_details}")
         return book_appointment_with_doctor(user_session, booking_details)
     
     except Exception as e:
@@ -838,6 +882,51 @@ def get_appointment_details(user_session, appointment_identifier: dict) -> str:
     except Exception as e:
         return f"Failed to get appointment details: {str(e)}"
 
+def book_appointment_today(user_session, booking_request: dict) -> str:
+    """Book an appointment for today or next available date with just time specified"""
+    try:
+        doctor_name = booking_request.get('doctor_name', '')
+        time_str = booking_request.get('time', '')
+        consultation_mode = booking_request.get('consultation_mode', 'virtual')
+        symptoms = booking_request.get('symptoms', 'General consultation')
+        
+        if not doctor_name or not time_str:
+            return "Please provide doctor name and time to book appointment."
+        
+        # Use current date
+        current_time = UTILITIES_FUNCTIONS.get_current_time()
+        date_str = current_time.strftime('%Y-%m-%d')
+        
+        # Parse time - handle various formats
+        try:
+            # Convert common time formats
+            time_str = time_str.lower().strip()
+            if 'am' in time_str or 'pm' in time_str:
+                # Convert 12-hour to 24-hour format
+                import datetime
+                time_obj = datetime.datetime.strptime(time_str.replace(' ', ''), '%I%p')
+                time_str = time_obj.strftime('%H:%M')
+            elif ':' not in time_str:
+                # Add :00 if just hour provided
+                if len(time_str) <= 2:
+                    time_str = f"{time_str.zfill(2)}:00"
+        except:
+            pass  # Use as-is if parsing fails
+        
+        booking_details = {
+            'doctor_name': doctor_name,
+            'date': date_str,
+            'time': time_str,
+            'consultation_mode': consultation_mode,
+            'symptoms': symptoms
+        }
+        
+        print(f"🔍 Booking for today with details: {booking_details}")
+        return book_appointment_with_doctor(user_session, booking_details)
+    
+    except Exception as e:
+        return f"Booking for today failed: {str(e)}"
+
 def get_general_information(user_session, query: dict) -> str:
     """Get general information about healthcare services"""
     try:
@@ -1061,6 +1150,29 @@ HEALTHCARE_TOOLS = [
                             "symptoms": {"type": "string", "description": "Reason for visit or symptoms"}
                         },
                         "required": ["doctor_name", "selected_slot"]
+                    }
+                },
+                "required": ["booking_request"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "book_appointment_today",
+            "description": "Book an appointment for today/current date when user specifies just time (e.g. '10 AM', '14:00')",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "booking_request": {
+                        "type": "object",
+                        "properties": {
+                            "doctor_name": {"type": "string", "description": "Name of the doctor"},
+                            "time": {"type": "string", "description": "Time in any format (10 AM, 14:00, 2 PM, etc.)"},
+                            "consultation_mode": {"type": "string", "enum": ["virtual", "clinic_visit", "home_care"], "description": "Type of consultation"},
+                            "symptoms": {"type": "string", "description": "Reason for visit or symptoms"}
+                        },
+                        "required": ["doctor_name", "time"]
                     }
                 },
                 "required": ["booking_request"]
