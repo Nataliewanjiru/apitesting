@@ -461,11 +461,18 @@ def get_current_date_if_invalid(date_str: str) -> str:
         provided_date = UTILITIES_FUNCTIONS.string_to_datetime(f"{date_str} 00:00:00.0 +0300")
         current_time = UTILITIES_FUNCTIONS.get_current_time()
         
-        # If the provided date is more than a year old or in the future beyond reasonable booking window
-        if (provided_date.year < current_time.year - 1) or (provided_date > current_time + timedelta(days=365)):
+        # More aggressive date correction - fix any date that's clearly wrong
+        # Fix if: older than 6 months, or from wrong year (like 2023 when it's 2025)
+        if (provided_date.year < current_time.year) or (provided_date < current_time - timedelta(days=180)) or (provided_date > current_time + timedelta(days=365)):
             # Use current date instead
             corrected_date = current_time.strftime('%Y-%m-%d')
-            print(f"🔍 Date correction: {date_str} -> {corrected_date} (using current date)")
+            print(f"🔍 Date correction: {date_str} -> {corrected_date} (invalid/old date detected)")
+            return corrected_date
+        
+        # If date is too far in the past (more than 1 day), use current date
+        if provided_date < current_time - timedelta(days=1):
+            corrected_date = current_time.strftime('%Y-%m-%d')
+            print(f"🔍 Date correction: {date_str} -> {corrected_date} (past date converted to today)")
             return corrected_date
         
         return date_str
@@ -490,7 +497,10 @@ def book_appointment_with_doctor(user_session, booking_details: dict) -> str:
             return "Please provide doctor name, date, and time to book appointment."
         
         # Fix date if it's invalid or from wrong year
-        date_str = get_current_date_if_invalid(date_str)
+        corrected_date = get_current_date_if_invalid(date_str)
+        if corrected_date != date_str:
+            print(f"🔍 Date corrected: {date_str} -> {corrected_date}")
+        date_str = corrected_date
         print(f"🔍 Using date: {date_str}")
         
         # Find the doctor
@@ -612,6 +622,7 @@ def get_my_appointments(user_session, filter_criteria: dict) -> str:
         status_filter = filter_criteria.get('status', 'all')  # all, upcoming, past, cancelled
         date_range = filter_criteria.get('date_range', 'all')  # all, today, week, month
         
+        print(f"🔍 Getting appointments for: {user_session.active_patient_profile}")
         if not user_session.active_patient_profile:
             return "Please log in to view your appointments."
         
@@ -619,17 +630,20 @@ def get_my_appointments(user_session, filter_criteria: dict) -> str:
         appointments = Appointment.filter_objects(
             patient=user_session.active_patient_profile
         )
+        print(f"🔍 Found {appointments.count()} total appointments")
         
-        # Apply status filter
+        # Apply status filter - but be more flexible for "upcoming"
         if status_filter != 'all':
             if status_filter == 'upcoming':
+                # Show active appointments (PENDING, BOOKING_PENDING) regardless of date
+                # This way past-dated appointments that are still active will show
                 appointments = appointments.filter(
-                    start_time__gte=UTILITIES_FUNCTIONS.get_current_time(),
                     status__in=[
                         CORE_CHOICES.AppointmentStatuses.PENDING.value,
                         CORE_CHOICES.AppointmentStatuses.BOOKING_PENDING.value
                     ]
                 )
+                print(f"🔍 After status filter (upcoming): {appointments.count()} appointments")
             elif status_filter == 'past':
                 appointments = appointments.filter(
                     start_time__lt=UTILITIES_FUNCTIONS.get_current_time(),
@@ -640,32 +654,36 @@ def get_my_appointments(user_session, filter_criteria: dict) -> str:
                     status=CORE_CHOICES.AppointmentStatuses.CANCELLED.value
                 )
         
-        # Apply date range filter
+        # Apply date range filter only if status is not "upcoming" 
+        # (to avoid filtering out active appointments with wrong dates)
         current_time = UTILITIES_FUNCTIONS.get_current_time()
-        if date_range == 'today':
-            appointments = appointments.filter(
-                start_time__date=current_time.date()
-            )
-        elif date_range == 'week':
-            week_end = current_time + timedelta(days=7)
-            appointments = appointments.filter(
-                start_time__gte=current_time,
-                start_time__lte=week_end
-            )
-        elif date_range == 'month':
-            month_end = current_time + timedelta(days=30)
-            appointments = appointments.filter(
-                start_time__gte=current_time,
-                start_time__lte=month_end
-            )
+        if date_range != 'all' and status_filter != 'upcoming':
+            if date_range == 'today':
+                appointments = appointments.filter(
+                    start_time__date=current_time.date()
+                )
+            elif date_range == 'week':
+                week_end = current_time + timedelta(days=7)
+                appointments = appointments.filter(
+                    start_time__gte=current_time,
+                    start_time__lte=week_end
+                )
+            elif date_range == 'month':
+                month_end = current_time + timedelta(days=30)
+                appointments = appointments.filter(
+                    start_time__gte=current_time,
+                    start_time__lte=month_end
+                )
         
         appointments = appointments.order_by('-start_time')[:20]  # Limit to 20 recent appointments
+        print(f"🔍 Final appointment count: {appointments.count()}")
         
         if not appointments:
             return "You have no appointments matching the criteria."
         
         appointment_list = []
         for apt in appointments:
+            print(f"🔍 Processing appointment: {apt.doctor.get_full_name()} on {apt.start_time} - Status: {apt.status}")
             apt_info = {
                 'doctor': f"{apt.doctor.title} {apt.doctor.get_full_name()}" if apt.doctor else 'TBD',
                 'date': UTILITIES_FUNCTIONS.normalize_date(apt.start_time),
@@ -687,6 +705,9 @@ def get_my_appointments(user_session, filter_criteria: dict) -> str:
         return result
         
     except Exception as e:
+        print(f"🔍 Error in get_my_appointments: {str(e)}")
+        import traceback
+        print(f"🔍 Traceback: {traceback.format_exc()}")
         return f"Failed to get appointments: {str(e)}"
 
 def cancel_appointment(user_session, cancellation_details: dict) -> str:
